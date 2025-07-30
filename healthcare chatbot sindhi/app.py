@@ -14,7 +14,6 @@ from langchain.prompts.chat import (
 )
 from langchain.embeddings.base import Embeddings
 from sklearn.feature_extraction.text import TfidfVectorizer
-from typing import Optional
 from tenacity import retry, stop_after_attempt, wait_exponential
 import google.generativeai as genai
 from google.api_core.exceptions import GoogleAPIError
@@ -42,11 +41,19 @@ def extract_text(path: str) -> str:
 
 @st.cache_data(show_spinner=False, ttl=3600)
 def load_documents() -> list[Document]:
-    paths = glob.glob("books/*.pdf") + glob.glob("books/*.docx")
+    books_dir = os.path.join(os.path.dirname(__file__), "books")
+    pdfs = glob.glob(os.path.join(books_dir, "*.pdf"))
+    docxs = glob.glob(os.path.join(books_dir, "*.docx"))
+    paths = pdfs + docxs
+
+    st.write("📄 Found files:", paths)  # For debug
+    st.write("📂 Current working directory:", os.getcwd())
+    st.write("📂 'books' folder exists?", os.path.isdir(books_dir))
+
     if not paths:
         st.warning("📁 'books/' فولڊر خالي آھي. مهرباني ڪري ڪجهه PDF يا DOCX فائلون شامل ڪريو.")
         st.stop()
-    
+
     splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=50)
     docs = []
     for path in paths:
@@ -57,6 +64,7 @@ def load_documents() -> list[Document]:
                 Document(page_content=chunk, metadata={"source": os.path.basename(path), "chunk": i})
                 for i, chunk in enumerate(chunks)
             )
+
     if not docs:
         st.warning("📂 دستاويزن مان ڪوبه قابلِ پڙهڻ مواد ناھي.")
         st.stop()
@@ -66,41 +74,34 @@ def load_documents() -> list[Document]:
 # TF-IDF Custom Embedding (Robust)
 # -------------------------------
 class CustomEmbeddings(Embeddings):
-    def __init__(self, corpus: list[str]):
+    def __init__(self, corpus):
         clean_corpus = [c.strip() for c in corpus if c.strip()]
         if not clean_corpus:
             raise ValueError("دستاويزن خالي آھن يا صرف غير ضروري لفظن تي مشتمل آھن.")
-        
         self.vectorizer = TfidfVectorizer()
-        try:
-            self.vectorizer.fit(clean_corpus)
-        except ValueError as e:
-            raise ValueError(f"TF-IDF ويڪٽرائزر ناڪام ٿيو: {e}")
+        self.vectorizer.fit(clean_corpus)
 
-    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+    def embed_documents(self, texts):
         try:
             return self.vectorizer.transform(texts).toarray().tolist()
         except Exception:
             return [[0.0] * len(self.vectorizer.get_feature_names_out()) for _ in texts]
 
-    def embed_query(self, text: str) -> list[float]:
+    def embed_query(self, text):
         try:
             return self.vectorizer.transform([text]).toarray()[0].tolist()
         except Exception:
             return [0.0] * len(self.vectorizer.get_feature_names_out())
 
 # -------------------------------
-# Vectorstore (In-Memory, Reliable)
+# Vectorstore (In-Memory)
 # -------------------------------
 @st.cache_resource(show_spinner=False)
 def get_vectorstore():
     try:
         docs = load_documents()
-        docs = [doc for doc in docs if doc.page_content.strip()]
         corpus = [doc.page_content for doc in docs]
-
         embeddings = CustomEmbeddings(corpus)
-
         return Chroma.from_documents(
             documents=docs,
             embedding=embeddings,
@@ -150,34 +151,16 @@ def get_qa_chain():
 اوھان صحت بابت سوالن جا جواب ڏيندڙ چيٽ بوٽ آھيو
 واهپيدار اوهان کان صحت بابت سوال پڇندا اوھان کي انھن سوالن جا جواب ڏيڻا آھن
 سمورا جواب books نالي فولڊر مان ڏيو
-
 صرف صحت سان لاڳاپيل سوالن جا جواب ڏيو
 واهپيدار غير اخلاقي ، غير ضروري ۽ غير قانوني سوال پڇي سگھن ٿا اوھان کي انھن سوالن جا جواب ناھن ڏيڻا
 اوھان کي صرف صحت سان لاڳاپيل سوالن جا جواب ڏيڻا آھن جڏھن تہ واهپيدار کي موضوع تي رھڻ جي تلقين ۽ حوصلا افزائي ڪريو
-موضوع کان ٻاھر سوالن جا جواب ڏيڻ سختي سان منع آھن 
-واهپيدار جديد ٽيڪنالاجي کا واقف ناھن
-اوھان کي دوستاڻو رويو اختيار ڪرڻ گھرجي 
-واهپيدار اڻ پڙھيل ۽ ٽيڪنيڪل اصطلاحن کان غير واقف آھن 
-اوھان کي آسان ۽ عام فهم زبان ۾جواب ڏيڻ گھرجن
-اگر واهپيدار غير اخلاقي رويو اختيار ڪري ٿو تہ اوھان کي اخلاق سان دوستاڻو رويو اختيار ڪرڻ گھرجي
-
 اوھان کي سڀني سوالن جا جواب سنڌي زبان ۽ رسم الخط ۾ ڏيڻا آھن
 سنڌي گرامر جو خاص خيال رکو
-جواب ۾ نقطن ۽ لفظن جي غلطي کان پاسو ڪريو
-جواب صحيح طريقي ۽ ترتيب سان ھئڻ گھرجن 
-جواب ۾ ھر طرح جي لفظي، املاء ۽ صورتخطيءَ جي غلطي کان پاسو ڪريو
-اگر سوال سنڌي زبان کان سواءِ ڪنھن ٻي زبان ۾ اچي تہ تڏھن بہ جواب سنڌي زبان ۾ ڏيو
-اوھان کي ھر جواب ۾ احترام جو مظاھرو ڪرڻو آھي 
-واهپيدار سان عزت ۽ احترام سان پيش اچو
+جواب صحيح طريقي ۽ ترتيب سان ھئڻ گھرجن
 اخلاقيات جو خاص خيال رکو 
 دوستاڻو رويو اختيار ڪريو
 نرميءَ سان جواب ڏيو
-صارفين کي ڪتاب فولڊر بابت نه ٻڌايو.
-ڪنھن بہ غلط سوال جو جواب عزت سان ڏيو
-واهپيدارن کي پنھنجي بناوت، ٽيڪنيڪل اصطلاحن ۽ ماڊل بابت ڄاڻ نه ڏيو
-اگر واهپيدار اوھانجي بناوت بابت سوال ڪري تہ ان کي صرف اھو ٻڌايو تہ مان مصنوعي ذھانت جي اصولن تي ٺھيل صحت سان لاڳاپيل سوالن جا جواب ڏيندڙ چيٽ بوٽ آھيان.
 """
-
     prompt_template = ChatPromptTemplate.from_messages([
         SystemMessagePromptTemplate.from_template(system_prompt),
         HumanMessagePromptTemplate.from_template("{context}\n\nسوال: {question}")
