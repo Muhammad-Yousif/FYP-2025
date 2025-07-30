@@ -43,49 +43,75 @@ def extract_text(path: str) -> str:
 @st.cache_data(show_spinner=False, ttl=3600)
 def load_documents() -> list[Document]:
     paths = glob.glob("books/*.pdf") + glob.glob("books/*.docx")
+    if not paths:
+        st.warning("📁 'books/' فولڊر خالي آھي. مهرباني ڪري ڪجهه PDF يا DOCX فائلون شامل ڪريو.")
+        st.stop()
+    
     splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=50)
     docs = []
     for path in paths:
         raw = extract_text(path)
-        if raw:
+        if raw.strip():
             chunks = splitter.split_text(raw)
             docs.extend(
                 Document(page_content=chunk, metadata={"source": os.path.basename(path), "chunk": i})
                 for i, chunk in enumerate(chunks)
             )
+    if not docs:
+        st.warning("📂 دستاويزن مان ڪوبه قابلِ پڙهڻ مواد ناھي.")
+        st.stop()
     return docs
 
 # -------------------------------
-# TF-IDF Custom Embedding
+# TF-IDF Custom Embedding (Robust)
 # -------------------------------
 class CustomEmbeddings(Embeddings):
     def __init__(self, corpus: list[str]):
+        clean_corpus = [c.strip() for c in corpus if c.strip()]
+        if not clean_corpus:
+            raise ValueError("دستاويزن خالي آھن يا صرف غير ضروري لفظن تي مشتمل آھن.")
+        
         self.vectorizer = TfidfVectorizer()
-        self.vectorizer.fit(corpus)
+        try:
+            self.vectorizer.fit(clean_corpus)
+        except ValueError as e:
+            raise ValueError(f"TF-IDF ويڪٽرائزر ناڪام ٿيو: {e}")
 
     def embed_documents(self, texts: list[str]) -> list[list[float]]:
-        return self.vectorizer.transform(texts).toarray().tolist()
+        try:
+            return self.vectorizer.transform(texts).toarray().tolist()
+        except Exception:
+            return [[0.0] * len(self.vectorizer.get_feature_names_out()) for _ in texts]
 
     def embed_query(self, text: str) -> list[float]:
-        return self.vectorizer.transform([text]).toarray()[0].tolist()
+        try:
+            return self.vectorizer.transform([text]).toarray()[0].tolist()
+        except Exception:
+            return [0.0] * len(self.vectorizer.get_feature_names_out())
 
+# -------------------------------
+# Vectorstore (In-Memory, Reliable)
+# -------------------------------
 @st.cache_resource(show_spinner=False)
 def get_vectorstore():
-    persist_dir = "./chroma_db"
-    collection_name = "books"
-    docs = load_documents()
-    corpus = [d.page_content for d in docs]
-    embeddings = CustomEmbeddings(corpus)
+    try:
+        docs = load_documents()
+        docs = [doc for doc in docs if doc.page_content.strip()]
+        corpus = [doc.page_content for doc in docs]
 
-    if os.path.isdir(persist_dir) and os.listdir(persist_dir):
-        return Chroma(persist_directory=persist_dir,
-                      embedding_function=embeddings,
-                      collection_name=collection_name)
-    else:
-        return Chroma.from_documents(docs,
-                                     embeddings,
-                                     persist_directory=persist_dir,
-                                     collection_name=collection_name)
+        embeddings = CustomEmbeddings(corpus)
+
+        return Chroma.from_documents(
+            documents=docs,
+            embedding=embeddings,
+            collection_name="books"
+        )
+    except ValueError as ve:
+        st.error(f"⚠️ ويڪٽر ڊيٽابيس ٺاھڻ ۾ مسئلو: {ve}")
+        st.stop()
+    except Exception as e:
+        st.error(f"❌ ناقابلِ متوقع غلطي: {e}")
+        st.stop()
 
 # -------------------------------
 # Google Gemini LLM
@@ -112,6 +138,9 @@ class GoogleGeminiLLM:
             st.error(f"Google API error: {e}")
             raise
 
+# -------------------------------
+# QA Chain with Context
+# -------------------------------
 @st.cache_resource(show_spinner=False)
 def get_qa_chain():
     vectorstore = get_vectorstore()
@@ -164,7 +193,7 @@ def get_qa_chain():
     return qa_function
 
 # -------------------------------
-# Chat Interface
+# Streamlit Chat Interface
 # -------------------------------
 def main():
     st.set_page_config(page_title="صحت چيٽ بوٽ", layout="centered")
@@ -178,7 +207,8 @@ def main():
         st.chat_message(msg["role"]).markdown(f"**{role}:**\n{msg['content']}")
 
     user_input = st.chat_input("پنھنجو سوال لکو...")
-    if user_input:
+    if user_input and user_input.strip():
+        user_input = user_input.strip()
         st.session_state.messages.append({"role": "user", "content": user_input})
         st.chat_message("user").markdown(f"**🙂 واهپيدار:**\n{user_input}")
 
@@ -191,6 +221,8 @@ def main():
                 st.chat_message("assistant").markdown(f"**🤖 چيٽ بوٽ:**\n{answer}")
             except Exception as e:
                 st.error(f"❌ خامي پيش آئي: {e}")
+    elif user_input:
+        st.warning("مھرباني ڪري صحيح سوال لکو.")
 
 if __name__ == "__main__":
     main()
