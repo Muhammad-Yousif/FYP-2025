@@ -3,17 +3,15 @@ import glob
 import streamlit as st
 import PyPDF2
 import docx
-from langchain.docstore.document import Document
-from langchain.text_splitter import CharacterTextSplitter
-from langchain.vectorstores import Chroma
+import numpy as np
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
 from langchain.chains import RetrievalQA
 from langchain.prompts.chat import (
     ChatPromptTemplate,
     SystemMessagePromptTemplate,
     HumanMessagePromptTemplate,
 )
-from langchain.embeddings.base import Embeddings
-from sklearn.feature_extraction.text import TfidfVectorizer
 from tenacity import retry, stop_after_attempt, wait_exponential
 import google.generativeai as genai
 from google.api_core.exceptions import GoogleAPIError
@@ -40,79 +38,41 @@ def extract_text(path: str) -> str:
     return text
 
 @st.cache_data(show_spinner=False, ttl=3600)
-def load_documents() -> list[Document]:
+def load_documents():
     books_dir = os.path.join(os.path.dirname(__file__), "books")
-    pdfs = glob.glob(os.path.join(books_dir, "*.pdf"))
-    docxs = glob.glob(os.path.join(books_dir, "*.docx"))
-    paths = pdfs + docxs
-
-    st.write("📄 Found files:", paths)  # For debug
-    st.write("📂 Current working directory:", os.getcwd())
-    st.write("📂 'books' folder exists?", os.path.isdir(books_dir))
+    paths = glob.glob(os.path.join(books_dir, "*.pdf")) + glob.glob(os.path.join(books_dir, "*.docx"))
 
     if not paths:
         st.warning("📁 'books/' فولڊر خالي آھي. مهرباني ڪري ڪجهه PDF يا DOCX فائلون شامل ڪريو.")
         st.stop()
 
-    splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=50)
-    docs = []
+    chunks = []
     for path in paths:
-        raw = extract_text(path)
-        if raw.strip():
-            chunks = splitter.split_text(raw)
-            docs.extend(
-                Document(page_content=chunk, metadata={"source": os.path.basename(path), "chunk": i})
-                for i, chunk in enumerate(chunks)
-            )
-
-    if not docs:
+        text = extract_text(path)
+        if text.strip():
+            split_chunks = [text[i:i+1000] for i in range(0, len(text), 1000)]
+            chunks.extend(split_chunks)
+    if not chunks:
         st.warning("📂 دستاويزن مان ڪوبه قابلِ پڙهڻ مواد ناھي.")
         st.stop()
-    return docs
+    return chunks
 
 # -------------------------------
-# TF-IDF Custom Embedding (Robust)
-# -------------------------------
-class CustomEmbeddings(Embeddings):
-    def __init__(self, corpus):
-        clean_corpus = [c.strip() for c in corpus if c.strip()]
-        if not clean_corpus:
-            raise ValueError("دستاويزن خالي آھن يا صرف غير ضروري لفظن تي مشتمل آھن.")
-        self.vectorizer = TfidfVectorizer()
-        self.vectorizer.fit(clean_corpus)
-
-    def embed_documents(self, texts):
-        try:
-            return self.vectorizer.transform(texts).toarray().tolist()
-        except Exception:
-            return [[0.0] * len(self.vectorizer.get_feature_names_out()) for _ in texts]
-
-    def embed_query(self, text):
-        try:
-            return self.vectorizer.transform([text]).toarray()[0].tolist()
-        except Exception:
-            return [0.0] * len(self.vectorizer.get_feature_names_out())
-
-# -------------------------------
-# Vectorstore (In-Memory)
+# TF-IDF Retriever (In-Memory)
 # -------------------------------
 @st.cache_resource(show_spinner=False)
-def get_vectorstore():
-    try:
-        docs = load_documents()
-        corpus = [doc.page_content for doc in docs]
-        embeddings = CustomEmbeddings(corpus)
-        return Chroma.from_documents(
-            documents=docs,
-            embedding=embeddings,
-            collection_name="books"
-        )
-    except ValueError as ve:
-        st.error(f"⚠️ ويڪٽر ڊيٽابيس ٺاھڻ ۾ مسئلو: {ve}")
-        st.stop()
-    except Exception as e:
-        st.error(f"❌ ناقابلِ متوقع غلطي: {e}")
-        st.stop()
+def build_retriever():
+    texts = load_documents()
+    vectorizer = TfidfVectorizer().fit(texts)
+    vectors = vectorizer.transform(texts)
+
+    def retrieve(query: str, k=3):
+        query_vec = vectorizer.transform([query])
+        similarities = cosine_similarity(query_vec, vectors)[0]
+        top_k_idx = np.argsort(similarities)[-k:][::-1]
+        return [texts[i] for i in top_k_idx if similarities[i] > 0.01]
+
+    return retrieve
 
 # -------------------------------
 # Google Gemini LLM
@@ -140,11 +100,11 @@ class GoogleGeminiLLM:
             raise
 
 # -------------------------------
-# QA Chain with Context
+# QA Chain using Retriever + LLM
 # -------------------------------
 @st.cache_resource(show_spinner=False)
 def get_qa_chain():
-    vectorstore = get_vectorstore()
+    retrieve = build_retriever()
     llm = GoogleGeminiLLM()
 
     system_prompt = """
@@ -152,14 +112,8 @@ def get_qa_chain():
 واهپيدار اوهان کان صحت بابت سوال پڇندا اوھان کي انھن سوالن جا جواب ڏيڻا آھن
 سمورا جواب books نالي فولڊر مان ڏيو
 صرف صحت سان لاڳاپيل سوالن جا جواب ڏيو
-واهپيدار غير اخلاقي ، غير ضروري ۽ غير قانوني سوال پڇي سگھن ٿا اوھان کي انھن سوالن جا جواب ناھن ڏيڻا
-اوھان کي صرف صحت سان لاڳاپيل سوالن جا جواب ڏيڻا آھن جڏھن تہ واهپيدار کي موضوع تي رھڻ جي تلقين ۽ حوصلا افزائي ڪريو
-اوھان کي سڀني سوالن جا جواب سنڌي زبان ۽ رسم الخط ۾ ڏيڻا آھن
-سنڌي گرامر جو خاص خيال رکو
-جواب صحيح طريقي ۽ ترتيب سان ھئڻ گھرجن
-اخلاقيات جو خاص خيال رکو 
-دوستاڻو رويو اختيار ڪريو
-نرميءَ سان جواب ڏيو
+غير اخلاقي، غير ضروري يا قانوني سوالن جا جواب نه ڏيو
+جواب سنڌي زبان ۽ رسم الخط ۾ ڏيو، احترام، سادگي ۽ وضاحت سان
 """
     prompt_template = ChatPromptTemplate.from_messages([
         SystemMessagePromptTemplate.from_template(system_prompt),
@@ -167,11 +121,10 @@ def get_qa_chain():
     ])
 
     def qa_function(inputs):
-        retriever = vectorstore.as_retriever(search_kwargs={"k": 3})
-        docs = retriever.get_relevant_documents(inputs["query"])
-        context = "\n".join(d.page_content for d in docs)
-        final_prompt = prompt_template.format(context=context, question=inputs["query"])
-        return {"result": llm.call(final_prompt)}
+        docs = retrieve(inputs["query"])
+        context = "\n".join(docs)
+        prompt = prompt_template.format(context=context, question=inputs["query"])
+        return {"result": llm.call(prompt)}
 
     return qa_function
 
@@ -191,7 +144,6 @@ def main():
 
     user_input = st.chat_input("پنھنجو سوال لکو...")
     if user_input and user_input.strip():
-        user_input = user_input.strip()
         st.session_state.messages.append({"role": "user", "content": user_input})
         st.chat_message("user").markdown(f"**🙂 واهپيدار:**\n{user_input}")
 
