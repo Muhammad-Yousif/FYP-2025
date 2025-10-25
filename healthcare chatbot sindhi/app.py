@@ -1,17 +1,3 @@
-# production-ready app.py
-"""
-Sindhi Healthcare Chatbot - Production-ready
-Author: Muhammad Faisal Jamali
-Date: 2025
-
-Features:
-- RAG-style pipeline using TF-IDF retriever + Google Gemini (google-generativeai)
-- Loads pre-provided books (PDF/DOCX) from ./books (no uploads)
-- Streamlit chat UI with two suggested quick-questions and free text input
-- Robust caching, retry for API calls, and friendly error handling
-- Avoids unnecessary heavy dependencies (no langchain / chromadb)
-"""
-
 import os
 import glob
 import logging
@@ -27,15 +13,10 @@ from sklearn.metrics.pairwise import cosine_similarity
 from tenacity import retry, stop_after_attempt, wait_exponential
 import google.generativeai as genai
 
-# -----------------------
-# Logging (useful in production)
-# -----------------------
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("sindhi_healthbot")
 
-# -----------------------
-# Config
-# -----------------------
+
 CHUNK_SIZE = 1000  # characters per chunk
 TOP_K = 3  # retrieval top-k
 SIM_THRESHOLD = 0.01  # min cosine similarity to consider
@@ -94,7 +75,7 @@ def load_documents() -> List[str]:
     paths = glob.glob(os.path.join(books_dir, "*.pdf")) + glob.glob(os.path.join(books_dir, "*.docx"))
 
     if not paths:
-        st.warning("📁 'books/' فولڊر خالي يا دستياب ناھي. مهرباني ڪري سرور تي ڪتاب يا دستاويز رکو.")
+        st.warning("'books/' فولڊر خالي يا دستياب ناھي. مهرباني ڪري سرور تي ڪتاب يا دستاويز رکو.")
         st.stop()
 
     chunks: List[str] = []
@@ -108,7 +89,7 @@ def load_documents() -> List[str]:
                     chunks.append(chunk)
 
     if not chunks:
-        st.warning("📂 دستاويزن مان پڙهڻ لائق ڪو مواد نڪتو ناهي.")
+        st.warning(" دستاويزن مان پڙهڻ لائق ڪو مواد نڪتو ناهي.")
         st.stop()
 
     logger.info("Loaded %d chunks from %d files", len(chunks), len(paths))
@@ -156,7 +137,7 @@ class GoogleGeminiLLM:
         self.model = cfg.get("model", "gemini-1.5-flash")
 
         if not self.api_key:
-            st.error("⚠️ Gemini API key missing in Streamlit secrets (openai_gemma.api_key).")
+            st.error("Gemini API key missing in Streamlit secrets (openai_gemma.api_key).")
             st.stop()
         try:
             genai.configure(api_key=self.api_key)
@@ -223,7 +204,7 @@ def main():
 
     # render prior messages
     for msg in st.session_state.messages:
-        role_display = "🙂 واهپيدار" if msg["role"] == "user" else "🤖 چيٽ بوٽ"
+        role_display = " واهپيدار" if msg["role"] == "user" else " چيٽ بوٽ"
         with st.chat_message(msg["role"]):
             st.markdown(f"**{role_display}:**\n{msg['content']}")
 
@@ -251,7 +232,7 @@ def main():
         # append and show user
         st.session_state.messages.append({"role": "user", "content": user_input})
         with st.chat_message("user"):
-            st.markdown(f"**🙂 واهپيدار:**\n{user_input}")
+            st.markdown(f"** واهپيدار:**\n{user_input}")
 
         # Call QA pipeline
         with st.spinner("چيٽ بوٽ جواب تيار ڪري رهيو آهي..."):
@@ -267,19 +248,20 @@ def main():
             # append and show assistant
             st.session_state.messages.append({"role": "assistant", "content": answer})
             with st.chat_message("assistant"):
-                st.markdown(f"**🤖 چيٽ بوٽ:**\n{answer}")
+                st.markdown(f"** چيٽ بوٽ:**\n{answer}")
 
 
     # small health-check for secrets (non-blocking)
-    if st.sidebar.button("Check Gemini config"):
-        cfg = st.secrets.get("openai_gemma", {})
-        if cfg.get("api_key"):
-            st.sidebar.success("Gemini API key present (hidden).")
-        else:
-            st.sidebar.error("Gemini API key missing. Add it in Streamlit secrets.")
+    # if st.sidebar.button("Check Gemini config"):
+    #     cfg = st.secrets.get("openai_gemma", {})
+    #     if cfg.get("api_key"):
+    #         st.sidebar.success("Gemini API key present (hidden).")
+    #     else:
+    #         st.sidebar.error("Gemini API key missing. Add it in Streamlit secrets.")
 
-    st.sidebar.caption("Developed by: Muhammad Faisal Jamali © 2025")
+    # st.sidebar.caption("Developed by: Muhammad Faisal Jamali © 2025")
 
 
 if __name__ == "__main__":
     main()
+
