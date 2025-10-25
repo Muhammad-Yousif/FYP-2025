@@ -27,6 +27,7 @@ def extract_text(path: str) -> str:
             for para in doc.paragraphs:
                 text += para.text + "\n"
     except Exception as e:
+        # show file-specific error but continue
         st.error(f"Error reading {os.path.basename(path)}: {e}")
     return text
 
@@ -46,8 +47,8 @@ def load_documents():
     for path in paths:
         text = extract_text(path)
         if text.strip():
-            # split long text into 1000-character chunks for TF-IDF
-            split_chunks = [text[i:i + 1000] for i in range(0, len(text), 1000)]
+            # split long text into 1000-character chunks for TF-IDF indexing
+            split_chunks = [text[i : i + 1000] for i in range(0, len(text), 1000)]
             chunks.extend(split_chunks)
 
     if not chunks:
@@ -65,7 +66,7 @@ def build_retriever():
     vectorizer = TfidfVectorizer().fit(texts)
     vectors = vectorizer.transform(texts)
 
-    def retrieve(query: str, k=3):
+    def retrieve(query: str, k: int = 3):
         query_vec = vectorizer.transform([query])
         sims = cosine_similarity(query_vec, vectors)[0]
         top_idx = np.argsort(sims)[-k:][::-1]
@@ -75,7 +76,7 @@ def build_retriever():
 
 
 # -------------------------------
-# Google Gemini LLM
+# Google Gemini LLM wrapper
 # -------------------------------
 class GoogleGeminiLLM:
     def __init__(self):
@@ -84,7 +85,7 @@ class GoogleGeminiLLM:
         self.model = cfg.get("model", "gemini-1.5-flash")
 
         if not self.api_key:
-            st.error("⚠️ Gemini API key missing in secrets.toml.")
+            st.error("⚠️ Gemini API key missing in secrets.toml under [openai_gemma].")
             st.stop()
 
         genai.configure(api_key=self.api_key)
@@ -125,46 +126,76 @@ def get_qa_chain():
 
 
 # -------------------------------
-# Streamlit Chat UI
+# Streamlit Chat UI (main)
 # -------------------------------
 def main():
     st.set_page_config(page_title="صحت چيٽ بوٽ", layout="centered")
     st.title("🩺 صحت بابت چيٽ بوٽ")
+    st.markdown(" Sindhi health Q&A — سوال پڇو ۽ ڪتابن مان جواب حاصل ڪريو.")
+    st.divider()
 
+    # session messages (preserve chat history)
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
-    # display previous chat
+    # render previous messages
     for msg in st.session_state.messages:
-        role = "🤖 چيٽ بوٽ" if msg["role"] == "assistant" else "🙂 واهپيدار"
-        st.chat_message(msg["role"]).markdown(f"**{role}:**\n{msg['content']}")
+        # msg["role"] should be either "user" or "assistant"
+        display_role = "🙂 واهپيدار" if msg["role"] == "user" else "🤖 چيٽ بوٽ"
+        with st.chat_message(msg["role"]):
+            st.markdown(f"**{display_role}:**\n{msg['content']}")
 
-    # Suggested questions (like ChatGPT style)
-    st.markdown("### تجويز ڪيل سوال:")
-    col1, col2 = st.columns(2)
+    # Suggested quick questions (two buttons)
+    st.markdown("### تجويز ڪيل سوال (تڪڙو چونڊيو):")
+    cols = st.columns([1, 1])
     q1 = "روزاني جسماني مشق جا فائدا ڇا آھن؟"
     q2 = "صحت مند غذا ۾ ڪھڙا کاڌا شامل ڪرڻ گھرجن؟"
-    if col1.button(q1):
-        st.session_state.prefill = q1
-    if col2.button(q2):
-        st.session_state.prefill = q2
 
-    # user text input
-    user_input = st.chat_input("پنھنجو سوال لکو...", value=st.session_state.pop("prefill", ""))
+    clicked_question = None
+    if cols[0].button(q1):
+        clicked_question = q1
+    if cols[1].button(q2):
+        clicked_question = q2
 
+    # Get input: if user clicked a suggested question, use it as input; otherwise show chat_input
+    if clicked_question:
+        user_input = clicked_question
+    else:
+        user_input = st.chat_input("پنھنجو سوال لکو...")
+
+    # Process input
     if user_input and user_input.strip():
+        # append user message
         st.session_state.messages.append({"role": "user", "content": user_input})
-        st.chat_message("user").markdown(f"**🙂 واهپيدار:**\n{user_input}")
+        with st.chat_message("user"):
+            st.markdown(f"**🙂 واهپيدار:**\n{user_input}")
 
-        with st.spinner("چيٽ بوٽ جواب ڏئي رهيو آهي..."):
+        # compute and show assistant reply
+        with st.spinner("چيٽ بوٽ جواب تيار ڪري رهيو آهي..."):
             try:
                 qa = get_qa_chain()
                 result = qa({"query": user_input})
                 answer = result.get("result", "معاف ڪجو، مان ھن سوال جو جواب نٿو ڏئي سگهان.")
-                st.session_state.messages.append({"role": "assistant", "content": answer})
-                st.chat_message("assistant").markdown(f"**🤖 چيٽ بوٽ:**\n{answer}")
             except Exception as e:
+                # show safe fallback if LLM or retrieval fails
                 st.error(f"❌ خامي پيش آئي: {e}")
+                answer = "معاف ڪجو، ھڪ ٽيڪنيڪي مسئلو پيش آيو. مھرباني ڪري بعد ۾ ڪوشش ڪريو."
+
+            # append and display assistant message
+            st.session_state.messages.append({"role": "assistant", "content": answer})
+            with st.chat_message("assistant"):
+                st.markdown(f"**🤖 چيٽ بوٽ:**\n{answer}")
+
+    # Sidebar information & disclaimer
+    st.sidebar.title("ℹ️ معلومات")
+    st.sidebar.markdown(
+        """
+- 📚 جواب 'books/' فولڊر مان حاصل ڪيل معلومات تي مبني آھن.
+- ⚠️ **Disclaimer:** هي صرف تعليمي معلومات لاءِ آھي — طبي مسئلن لاءِ مھرباني ڪري تصديق ٿيل صحت ماهر سان رجوع ڪريو.
+"""
+    )
+    st.sidebar.divider()
+    st.sidebar.caption("Developed by: Muhammad Faisal Jamali © 2025")
 
 
 if __name__ == "__main__":
