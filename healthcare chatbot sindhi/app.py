@@ -93,7 +93,7 @@ class GoogleGeminiLLM:
     def __init__(self):
         cfg = st.secrets.get("openai_gemma", {})
         self.api_key = cfg.get("api_key")
-        self.model = cfg.get("model", "models/gemini-2.0-flash")
+        self.model = cfg.get("model", "models/gemini-2.5-flash")
 
 
         if not self.api_key:
@@ -195,5 +195,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
