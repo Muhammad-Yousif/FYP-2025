@@ -89,22 +89,32 @@ def build_retriever():
 # -------------------------------
 # GOOGLE GEMINI LLM WRAPPER
 # -------------------------------
+# -------------------------------
+# GOOGLE GEMINI LLM WRAPPER
+# -------------------------------
 class GoogleGeminiLLM:
     def __init__(self):
-        cfg = st.secrets.get("openai_gemma", {})
+        # ⬇️ FIX 1: Change to the correct section name
+        cfg = st.secrets.get("gemini", {})
         self.api_key = cfg.get("api_key")
-        self.model = cfg.get("model", "models/gemini-2.5-flash")
-
+        
+        # ⬇️ FIX 2: Use the model name directly, without the "models/" prefix
+        self.model = cfg.get("model", "gemini-2.5-flash") 
 
         if not self.api_key:
-            st.error("⚠️ Gemini API key missing in secrets.toml.")
-            st.stop()
+            # You can also check the environment variable
+            self.api_key = os.environ.get("GOOGLE_API_KEY") 
+            if not self.api_key:
+                st.error("⚠️ Gemini API key missing in secrets.toml or environment variables.")
+                st.stop()
 
+        # The genai.configure call is correct
         genai.configure(api_key=self.api_key)
 
     @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=1, max=6))
     def call(self, prompt: str) -> str:
         try:
+            # The model is passed correctly here, using the fixed 'self.model'
             model = genai.GenerativeModel(self.model)
             response = model.generate_content(prompt)
             if hasattr(response, "text") and response.text:
@@ -195,6 +205,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
